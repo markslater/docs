@@ -65,13 +65,13 @@ Replication Requires Versioning
 MinIO relies on the immutability protections provided by versioning to
 synchronize objects between the source and replication target.
 
-Use the :mc-cmd:`mc version suspend` command to enable versioning on 
+Use the :mc-cmd:`mc version enable` command to enable versioning on 
 *both* the source and destination bucket before starting this procedure:
 
 .. code-block:: shell
    :class: copyable
 
-   mc version ALIAS/PATH
+   mc version enable ALIAS/PATH
 
 - Replace :mc-cmd:`ALIAS <mc version ALIAS>` with the
   :mc:`alias <mc alias>` of the MinIO cluster.
@@ -230,9 +230,10 @@ See :ref:`minio-replication-behavior-delete` for more complete documentation.
 Replication of Encrypted Objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-MinIO supports replicating objects encrypted with automatic 
-Server-Side Encryption (SSE-S3). Both the source and destination buckets
-*must* have automatic SSE-S3 enabled for MinIO to replicate an encrypted object.
+MinIO supports replicating objects encrypted with automatic Server-Side
+Encryption (SSE-S3 or SSE_KMS). Both the source and destination buckets *must*
+have automatic SSE-S3/SSE-KMS enabled for MinIO to replicate an encrypted
+object.
 
 As part of the replication process, MinIO *decrypts* the object on the source
 bucket and transmits the unencrypted object. The destination MinIO cluster then

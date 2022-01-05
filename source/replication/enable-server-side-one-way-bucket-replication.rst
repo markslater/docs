@@ -206,9 +206,10 @@ See :ref:`minio-replication-behavior-delete` for more complete documentation.
 Replication of Encrypted Objects
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-MinIO supports replicating objects encrypted with automatic 
-Server-Side Encryption (SSE-S3). Both the source and destination buckets
-*must* have automatic SSE-S3 enabled for MinIO to replicate an encrypted object.
+MinIO supports replicating objects encrypted with automatic Server-Side
+Encryption (SSE-S3 or SSE-KMS). Both the source and destination buckets *must*
+have automatic SSE-S3/SSE-KMS enabled for MinIO to replicate an encrypted
+object.
 
 As part of the replication process, MinIO *decrypts* the object on the source
 bucket and transmits the unencrypted object. The destination MinIO cluster then
