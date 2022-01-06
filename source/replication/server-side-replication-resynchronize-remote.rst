@@ -44,7 +44,7 @@ complete network connectivity to the remote.
 
 The remote deployment may be "unhealthy" in that it has suffered partial or
 total data loss. Resynchronization addresses the data loss as long as both
-source and destiantion maintain connectivity.
+source and destination maintain connectivity.
 
 Disable Replication on Remote Bucket
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
