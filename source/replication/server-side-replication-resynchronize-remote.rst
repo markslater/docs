@@ -9,7 +9,7 @@ Resynchronize Bucket from Remote Replica
 
 .. contents:: Table of Contents
    :local:
-   :depth: 2
+   :depth: 1
 
 The procedure on this page resynchronizes the contents of a MinIO
 bucket using a healthy replication remote. Resynchronization supports
@@ -214,19 +214,170 @@ You can then configure object retention rules at any time.
 Object locking requires :ref:`versioning <minio-bucket-versioning>` and
 enables the feature implicitly.
 
+Resynchronize Objects after Partial Data Loss
+---------------------------------------------
+
+This procedure assumes a MinIO deployment where a bucket participating in 
+:ref:`active-active replication <minio-bucket-replication-serverside-twoway>`
+or :ref:`multi-site replication <minio-bucket-replication-serverside-multi>`
+suffers partial data loss. Specifically, all of the following should be true:
+
+- The deployment maintains connectivity to the other MinIO deployments in the
+  replication configuration.
+- The bucket retained it's replication configuration settings.
+- The bucket can successfully replicate new objects or write operations
+  according to the configured replication rules.
+
+The following steps use ``Alpha`` and ``Baker`` as placeholder :ref:`aliases
+<alias>` for each MinIO deployment. ``Alpha`` provides the "healthy" source
+data for the "unhealthy" ``Baker`` deployment.
+
+Replace these example aliases with those of the MinIO deployments which act as
+the healthy source and unhealthy remote. This procedure assumes access to the
+necessary users and permissions to perform replication-related operations. See
+:ref:`minio-users` and :ref:`MinIO Policy Based Access Control <minio-policy>`
+for more complete documentation on MinIO users and policies respectively.
+
+1) Identify User Accounts used for Replication
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+MinIO requires specific :ref:`permissions 
+<minio-bucket-replication-serverside-resynchronize-permissions>` to support
+replication. 
+
+Use the :mc-cmd:`mc admin user list`, :mc-cmd:`mc admin user info` and
+:mc-cmd:`mc admin policy info` to determine which users on both the 
+healthy source and the unhealthy remote MinIO deployment support replication.
+
+The remaining steps in this procedure assume that both deployments have
+``ReplicationAdmin`` and ``ReplicationRemoteUser`` users with permissions
+to replicate and receive replicated traffic respectively.
+
+2) Configure ``mc`` Replication Admin Access
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use :mc-cmd:`mc alias list` to verify the configured aliases on your host
+machine. You can skip this step if you already have aliases for both
+deployments which grant access to replication administration.
+
+Use the :mc-cmd:`mc alias set` command to add a replication-specific alias for
+both deployments:
+
+.. code-block:: shell
+   :class: copyable
+
+   mc alias set AlphaReplication HOSTNAME AlphaReplicationAdmin LongRandomSecretKey
+   mc alias set BakerReplication HOSTNAME BakerReplicationAdmin LongRandomSecretKey
+
+3) Disable Replication on the Bucket which Requires Resynchronization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+MinIO recommends disabling replication on the unhealthy deployment to avoid
+unexpected or undesired replication states.
+
+Configure the reverse proxy, load balancer, or other network control plane
+managing connections to your active-active sites to stop sending traffic to the
+unhealthy deployment.
+
+The following command uses :mc-cmd:`mc replicate ls` to identify all replication
+rules on the bucket. It then uses the :mc-cmd:`mc replicate edit` command to
+disable the replication rules on the unhealthy bucket for the duration of the
+resynchronization procedure. 
+
+.. code-block:: shell
+   :class: copyable
+
+   mc replicate ls Baker/BUCKET
+
+   mc replicate edit --id ID --state disable
+
+- Replace ``BUCKET`` with the name of the bucket which requires 
+  resynchronization.
+- Replace the ``ID`` with the :mc-cmd:`~mc replicate edit id` of each
+  replication rule to disable.
+
+4) Start the Resynchronization Procedure
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Run the :mc-cmd:`mc admin bucket remote ls` command to list the configured
+remote targets on the ``Alpha`` deployment for the ``BUCKET``:
+
+.. code-block:: shell
+   :class: copyable
+
+   mc admin bucket remote ls Alpha/BUCKET
+
+Identify the ARN associated to the ``BUCKET`` on the ``Baker`` deployment.
+Run the :mc-cmd:`mc replicate resync` command to begin the resynchronization
+process using this ARN value:
+
+.. code-block:: shell
+   :class: copyable
+
+   mc replicate resync --remote-bucket "arn:minio:replication::UUID:BUCKET" alpha/BUCKET
+
+- Replace the ``--remote-bucket`` value with the ARN of the ``BUCKET`` on the
+  ``Baker`` deployment. 
+
+  Use :mc-cmd:`mc admin bucket remote ls` to retrieve the replication target
+  ARN.
+
+- Replace the ``BUCKET`` with the name of the bucket on the source MinIO
+  deployment.
+
+The command returns a resynchronization job ID indicating that the process has
+begun.
+
+5) Monitor Resynchronization
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Use the :mc-cmd:`mc replicate status` command on the ``Baker`` deployment to
+track the received replication data:
+
+.. code-block:: shell
+   :class: copyable
+
+   mc replicate status Baker/BUCKET
+
+The replication received bytes increases throughout the resynchronization 
+process up through completion.
+
+6) Re-enable Replication on the Resynchronized Bucket
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The following command uses :mc-cmd:`mc replicate ls` to identify all replication
+rules on the bucket. It then uses the :mc-cmd:`mc replicate edit` command to
+enable the replication rules on the bucket.
+
+.. code-block:: shell
+   :class: copyable
+
+   mc replicate ls Baker/BUCKET
+
+   mc replicate edit --id ID --state enable
+
+- Replace ``BUCKET`` with the name of the bucket which requires 
+  resynchronization.
+- Replace the ``ID`` with the :mc-cmd:`~mc replicate edit id` of each
+  replication rule to disable.
+
+Perform basic validation that active replication to the the other sites in the
+replication configuration succeeds. For example, create one or more test files
+and check that they replicate as expected.
+
+Once replication is validated and all sites are synchronized,configure the
+reverse proxy, load balancer, or other network control plane managing
+connections to your active-active sites to resume sending traffic to the
+resynchronized deployment.
+
+Resynchronize Objects after Total Data Loss
+-------------------------------------------
+
 Procedure
 ---------
 
 1) Configure User Accounts and Policies for Replication
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The following examples use ``Alpha`` and ``Baker`` as placeholder :ref:`aliases
-<alias>` for each MinIO cluster. You should replace these values with the
-appropriate aliases for the MinIO deployments on which you are configuring
-bucket replication. These examples assume that the specified aliases have the
-necessary permissions for creating policies and users on both deployments. See
-:ref:`minio-users` and :ref:`MinIO Policy Based Access Control <minio-policy>`
-for more complete documentation on MinIO users and policies respectively.
 
 The following code creates the user and policies necessary for
 resynchronization of data from ``Alpha`` to ``Baker``. Replace the password
