@@ -217,37 +217,61 @@ enables the feature implicitly.
 Resynchronize Objects after Partial Data Loss
 ---------------------------------------------
 
-This procedure assumes a MinIO deployment where a bucket participating in 
-:ref:`active-active replication <minio-bucket-replication-serverside-twoway>`
-or :ref:`multi-site replication <minio-bucket-replication-serverside-multi>`
-suffers partial data loss. Specifically, all of the following should be true:
+This procedure uses a healthy :ref:`MinIO replication target 
+<minio-bucket-replication-serverside>` to restore data to a MinIO bucket that
+has lost some or all stored objects while retaining the replica configuration.
 
-- The deployment maintains connectivity to the other MinIO deployments in the
-  replication configuration.
-- The bucket retained it's replication configuration settings.
-- The bucket can successfully replicate new objects or write operations
-  according to the configured replication rules.
+This procedure does *not* provide instructions on restoring non-replication
+configurations, such as :ref:`MinIO Security features <minio-security>`.
 
-The following steps use ``Alpha`` and ``Baker`` as placeholder :ref:`aliases
-<alias>` for each MinIO deployment. ``Alpha`` provides the "healthy" source
-data for the "unhealthy" ``Baker`` deployment.
+1) Create Replication Users
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Replace these example aliases with those of the MinIO deployments which act as
-the healthy source and unhealthy remote. This procedure assumes access to the
-necessary users and permissions to perform replication-related operations. See
-:ref:`minio-users` and :ref:`MinIO Policy Based Access Control <minio-policy>`
-for more complete documentation on MinIO users and policies respectively.
+This step creates the necessary :ref:`users <minio-users>` performing
+replication administration and configuration. You can skip this step if both
+deployments have existing users that :ref:`support replication
+<minio-bucket-replication-serverside-resynchronize-permissions>`.
 
-1) Identify User Accounts used for Replication
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The following script creates the user and policies necessary for supporting
+replication. Copy the example to a text file and edit it as follows before
+executing in a terminal or shell environment:
 
-MinIO requires specific :ref:`permissions 
-<minio-bucket-replication-serverside-resynchronize-permissions>` to support
-replication. 
+- Replace ``SOURCE`` with the :ref:`alias <alias>` corresponding to the healthy
+  MinIO deployment.
 
-Use the :mc-cmd:`mc admin user list`, :mc-cmd:`mc admin user info` and
-:mc-cmd:`mc admin policy info` to determine which users on both the 
-healthy source and the unhealthy remote MinIO deployment support replication.
+- Replace ``TARGET`` with the :ref:`alias <alias>` corresponding to the
+  unhealthy MinIO deployment. 
+
+- Replace the password ``LongRandomSecretKey`` with a long, random, and secure
+  secret key as per your organizations best practices for password generation.
+
+.. code-block:: shell
+   :class: copyable
+
+   echo "Downloading policies to /tmp/"
+
+   wget -O /tmp/ReplicationAdminPolicy.json https://docs.min.io/minio/baremetal/examples/ReplicationAdminPolicy.json
+   wget -O /tmp/ReplicationRemoteUserPolicy.json https://docs.min.io/minio/baremetal/examples/ReplicationRemoteUserPolicy.json | \
+
+   echo "Create Replication Administrator Policy and User"
+
+   mc admin policy add SOURCE ReplicationAdminPolicy /tmp/ReplicationAdminPolicy.json
+   mc admin user add SOURCE ReplicationAdmin LongRandomSecretKey
+   mc admin policy set SOURCE ReplicationAdminPolicy user=ReplicationAdmin
+
+   mc admin policy add TARGET ReplicationAdminPolicy /tmp/ReplicationAdminPolicy.json
+   mc admin user add TARGET ReplicationAdmin LongRandomSecretKey
+   mc admin policy set TARGET ReplicationAdminPolicy user=ReplicationAdmin
+
+   echo "Create Replication Remote User Policy and User"
+
+   mc admin policy add SOURCE ReplicationRemoteUserPolicy /tmp/ReplicationRemoteUserPolicy.json
+   mc admin user add SOURCE ReplicationRemoteUser LongRandomSecretKey
+   mc admin policy set SOURCE ReplicationRemoteUserPolicy user=ReplicationRemoteUser
+
+   mc admin policy add TARGET ReplicationRemoteUserPolicy /tmp/ReplicationRemoteUserPolicy.json
+   mc admin user add TARGET ReplicationRemoteUser LongRandomSecretKey
+   mc admin policy set TARGET ReplicationRemoteUserPolicy user=ReplicationRemoteUser
 
 The remaining steps in this procedure assume that both deployments have
 ``ReplicationAdmin`` and ``ReplicationRemoteUser`` users with permissions
@@ -256,23 +280,29 @@ to replicate and receive replicated traffic respectively.
 2) Configure ``mc`` Replication Admin Access
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use :mc-cmd:`mc alias list` to verify the configured aliases on your host
-machine. You can skip this step if you already have aliases for both
-deployments which grant access to replication administration.
+You can skip this step if you already have aliases for both deployments which
+grant access to replication administration. Use :mc-cmd:`mc alias list` to
+verify the configured aliases on your host machine. 
 
 Use the :mc-cmd:`mc alias set` command to add a replication-specific alias for
-both deployments:
+both deployments. 
+
+- Replace ``SOURCE`` and ``TARGET`` with the :ref:`alias <alias>` for the
+  healthy source and unhealthy remote MinIO deployments.
+
+- Replace ``HOSTNAME`` with the DNS-resolvable hostname for the ``SOURCE``
+  and ``TARGET`` MinIO deployments.
 
 .. code-block:: shell
    :class: copyable
 
-   mc alias set AlphaReplication HOSTNAME AlphaReplicationAdmin LongRandomSecretKey
-   mc alias set BakerReplication HOSTNAME BakerReplicationAdmin LongRandomSecretKey
+   mc alias set SOURCEReplicationAdmin HOSTNAME ReplicationAdmin LongRandomSecretKey
+   mc alias set TARGETReplicationAdmin HOSTNAME ReplicationAdmin LongRandomSecretKey
 
-3) Disable Replication on the Bucket which Requires Resynchronization
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+3) Disable Replication on the Damaged Bucket
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-MinIO recommends disabling replication on the unhealthy deployment to avoid
+MinIO recommends disabling replication on the unhealthy bucket to avoid
 unexpected or undesired replication states.
 
 Configure the reverse proxy, load balancer, or other network control plane
@@ -287,7 +317,7 @@ resynchronization procedure.
 .. code-block:: shell
    :class: copyable
 
-   mc replicate ls Baker/BUCKET
+   mc replicate ls TARGETReplicationAdmin/BUCKET
 
    mc replicate edit --id ID --state disable
 
@@ -300,24 +330,24 @@ resynchronization procedure.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Run the :mc-cmd:`mc admin bucket remote ls` command to list the configured
-remote targets on the ``Alpha`` deployment for the ``BUCKET``:
+remote targets on the ``SOURCE`` deployment for the ``BUCKET``:
 
 .. code-block:: shell
    :class: copyable
 
-   mc admin bucket remote ls Alpha/BUCKET
+   mc admin bucket remote ls SOURCE/BUCKET
 
-Identify the ARN associated to the ``BUCKET`` on the ``Baker`` deployment.
+Identify the ARN associated to the ``BUCKET`` on the ``TARGET`` deployment.
 Run the :mc-cmd:`mc replicate resync` command to begin the resynchronization
 process using this ARN value:
 
 .. code-block:: shell
    :class: copyable
 
-   mc replicate resync --remote-bucket "arn:minio:replication::UUID:BUCKET" alpha/BUCKET
+   mc replicate resync --remote-bucket "arn:minio:replication::UUID:BUCKET" SOURCE/BUCKET
 
 - Replace the ``--remote-bucket`` value with the ARN of the ``BUCKET`` on the
-  ``Baker`` deployment. 
+  ``TARGET`` deployment. 
 
   Use :mc-cmd:`mc admin bucket remote ls` to retrieve the replication target
   ARN.
@@ -331,13 +361,13 @@ begun.
 5) Monitor Resynchronization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use the :mc-cmd:`mc replicate status` command on the ``Baker`` deployment to
+Use the :mc-cmd:`mc replicate status` command on the ``TARGET`` deployment to
 track the received replication data:
 
 .. code-block:: shell
    :class: copyable
 
-   mc replicate status Baker/BUCKET
+   mc replicate status TARGET/BUCKET
 
 The replication received bytes increases throughout the resynchronization 
 process up through completion.
@@ -373,58 +403,110 @@ resynchronized deployment.
 Resynchronize Objects after Total Data Loss
 -------------------------------------------
 
-Procedure
----------
+This procedure uses a healthy :ref:`MinIO replication target 
+<minio-bucket-replication-serverside>` to restore data to a MinIO bucket that
+has lost *all* objects and configurations.
 
-1) Configure User Accounts and Policies for Replication
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+This procedure does *not* provide instructions on restoring non-replication
+configurations, such as :ref:`MinIO Security features <minio-security>`.
 
-The following code creates the user and policies necessary for
-resynchronization of data from ``Alpha`` to ``Baker``. Replace the password
-``LongRandomSecretKey`` with a long, random, and secure secret key as per
-your organizations best practices for password generation.
+1) Create Replication Users
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This step creates the necessary :ref:`users <minio-users>` performing
+replication administration and configuration. You can skip this step if both
+deployments have existing users that :ref:`support replication
+<minio-bucket-replication-serverside-resynchronize-permissions>`.
+
+The following script creates the user and policies necessary for supporting
+replication. Copy the example to a text file and edit it as follows before
+executing in a terminal or shell environment:
+
+- Replace ``SOURCE`` with the :ref:`alias <alias>` corresponding to the healthy
+  MinIO deployment.
+
+- Replace ``TARGET`` with the :ref:`alias <alias>` corresponding to the
+  unhealthy MinIO deployment. 
+
+- Replace the password ``LongRandomSecretKey`` with a long, random, and secure
+  secret key as per your organizations best practices for password generation.
 
 .. code-block:: shell
    :class: copyable
 
-   wget -O - https://docs.min.io/minio/baremetal/examples/ReplicationAdminPolicy.json | \
-   mc admin policy add Alpha ReplicationAdminPolicy /dev/stdin
-   mc admin user add Alpha alphaReplicationAdmin LongRandomSecretKey
-   mc admin policy set Alpha ReplicationAdminPolicy user=alphaReplicationAdmin
+   echo "Downloading policies to /tmp/"
 
-   wget -O - https://docs.min.io/minio/baremetal/examples/ReplicationRemoteUserPolicy.json | \
-   mc admin policy add Baker ReplicationRemoteUserPolicy /dev/stdin
-   mc admin user add Baker bakerReplicationRemoteUser LongRandomSecretKey
-   mc admin policy set Baker ReplicationRemoteUserPolicy user=bakerReplicationRemoteUser
+   wget -O /tmp/ReplicationAdminPolicy.json https://docs.min.io/minio/baremetal/examples/ReplicationAdminPolicy.json
+   wget -O /tmp/ReplicationRemoteUserPolicy.json https://docs.min.io/minio/baremetal/examples/ReplicationRemoteUserPolicy.json | \
 
-You can skip this step if
-both deployments already have users with the necessary :ref:`permissions
-<minio-bucket-replication-serverside-resynchronize-permissions>`.
+   echo "Create Replication Administrator Policy and User"
+
+   mc admin policy add SOURCE ReplicationAdminPolicy /tmp/ReplicationAdminPolicy.json
+   mc admin user add SOURCE ReplicationAdmin LongRandomSecretKey
+   mc admin policy set SOURCE ReplicationAdminPolicy user=ReplicationAdmin
+
+   mc admin policy add TARGET ReplicationAdminPolicy /tmp/ReplicationAdminPolicy.json
+   mc admin user add TARGET ReplicationAdmin LongRandomSecretKey
+   mc admin policy set TARGET ReplicationAdminPolicy user=ReplicationAdmin
+
+   echo "Create Replication Remote User Policy and User"
+
+   mc admin policy add SOURCE ReplicationRemoteUserPolicy /tmp/ReplicationRemoteUserPolicy.json
+   mc admin user add SOURCE ReplicationRemoteUser LongRandomSecretKey
+   mc admin policy set SOURCE ReplicationRemoteUserPolicy user=ReplicationRemoteUser
+
+   mc admin policy add TARGET ReplicationRemoteUserPolicy /tmp/ReplicationRemoteUserPolicy.json
+   mc admin user add TARGET ReplicationRemoteUser LongRandomSecretKey
+   mc admin policy set TARGET ReplicationRemoteUserPolicy user=ReplicationRemoteUser
+
+The remaining steps in this procedure assume that both deployments have
+``ReplicationAdmin`` and ``ReplicationRemoteUser`` users with permissions
+to replicate and receive replicated traffic respectively.
 
 2) Configure ``mc`` Replication Admin Access
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+You can skip this step if you already have aliases for both deployments which
+grant access to replication administration. Use :mc-cmd:`mc alias list` to
+verify the configured aliases on your host machine. 
+
 Use the :mc-cmd:`mc alias set` command to add a replication-specific alias for
-the ``Alpha`` deployment:
+both deployments. 
+
+- Replace ``SOURCE`` and ``TARGET`` with the :ref:`alias <alias>` for the
+  healthy source and unhealthy remote MinIO deployments.
+
+- Replace ``HOSTNAME`` with the DNS-resolvable hostname for the ``SOURCE``
+  and ``TARGET`` MinIO deployments.
 
 .. code-block:: shell
    :class: copyable
 
-   mc alias set AlphaReplication HOSTNAME AlphaReplicationAdmin LongRandomSecretKey
+   mc alias set SOURCEReplicationAdmin HOSTNAME ReplicationAdmin LongRandomSecretKey
+   mc alias set TARGETReplicationAdmin HOSTNAME ReplicationAdmin LongRandomSecretKey
 
 3) Start the Resynchronization Procedure
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Run the :mc-cmd:`mc replicate resync` command to begin the resynchronization
-process:
+Run the :mc-cmd:`mc admin bucket remote ls` command to list the configured
+remote targets on the ``SOURCE`` deployment for the ``BUCKET``:
 
 .. code-block:: shell
    :class: copyable
 
-   mc replicate resync --remote-bucket "arn:minio:replication::UUID:BUCKET" alpha/BUCKET
+   mc admin bucket remote ls SOURCE/BUCKET
+
+Identify the ARN associated to the ``BUCKET`` on the ``TARGET`` deployment.
+Run the :mc-cmd:`mc replicate resync` command to begin the resynchronization
+process using this ARN value:
+
+.. code-block:: shell
+   :class: copyable
+
+   mc replicate resync --remote-bucket "arn:minio:replication::UUID:BUCKET" SOURCE/BUCKET
 
 - Replace the ``--remote-bucket`` value with the ARN of the ``BUCKET`` on the
-  ``Baker`` deployment. 
+  ``TARGET`` deployment. 
 
   Use :mc-cmd:`mc admin bucket remote ls` to retrieve the replication target
   ARN.
@@ -438,30 +520,22 @@ begun.
 4) Monitor Resynchronization
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Use any of the following methods for tracking resynchronization progress:
+Use the :mc-cmd:`mc replicate status` command on the ``TARGET`` deployment to
+track the received replication data:
 
-- Run :mc-cmd:`mc replicate status` on both ``Alpha`` and ``Baker`` to track
-  the sent and received replication data.
+.. code-block:: shell
+   :class: copyable
 
-- Run :mc-cmd:`mc ls -r --versions ALIAS | wc -l <mc ls>` on
-  ``Alpha`` and ``Baker`` to compare the total objects on both deployments.
+   mc replicate status TARGET/BUCKET
+
+The replication received bytes increases throughout the resynchronization 
+process up through completion.
 
 5) Reconfigure Replication on Remote
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Once the remote bucket fully synchronizes with the source, you can safely
-re-enable replication on the remote.
-
-If you disabled replication rules on the remote bucket, use
-:mc-cmd:`mc replicate edit` to re-enable those rules
-
-If the remote bucket data loss included the replica configuration, use the
-:mc-cmd:`mc admin bucket remote add` and :mc-cmd:`mc replicate add` commands
-to rebuild the replication configuration to match the source.
-
-For deployments which regularly back up their replication configurations
-using :mc-cmd:`mc replicate export`, use :mc-cmd:`mc replicate import` to
-reapply the bucket replication configuration.
+Once the ``TARGET`` bucket fully synchronizes with the source, you can safely
+configure replication on the remote.
 
 See :ref:`minio-bucket-replication-serverside-twoway` or 
 :ref:`minio-bucket-replication-serverside-multi` for a detailed procedure
